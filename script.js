@@ -44,14 +44,16 @@ const CONFIG = {
         }
     },
     animations: {
-        lineClearDuration: 300, // ms
-        hardDropFlash: true
+        hardDropFlash: true,
+        lineClearPause: 800,    // ✅ Time to pause after line clear (ms)
+        lineFlashSpeed: 150     // ✅ Duration of each flash phase (ms)
     },
     audio: {
         sfx: {
             drop: './sounds/drop.wav',
             rotate: './sounds/rotate.wav',
             clear: './sounds/clear.wav',
+            tetris: './sounds/tetris.mp3',
             gameover: './sounds/gameover.wav'
         },
         bgm: [
@@ -358,6 +360,9 @@ class Board {
         this.isLocked = false;
         this.lineFlashRows = []; // rows currently animating flash
         this.lineFlashTimer = 0;
+        this.isLineClearing = false;
+        this.lineClearPauseElapsed = 0;
+        this.pendingClearRows = [];
         this.gameOver = false;
         this.randomizer = new Randomizer(CONFIG.dev.randomizer);
         this.nextPieceKey = this.randomizer.next();
@@ -608,11 +613,7 @@ class Board {
             return;
         }
 
-        /* Start line flash animation */
-        this.lineFlashRows = fullRows;
-        this.lineFlashTimer = performance.now();
-
-        /* Calculate score using Gameboy formula: multiplier = level + 1 */
+        /* Calculate score using Gameboy formula */
         const multiplier = this.level + 1;
         let lineScore = 0;
         switch (fullRows.length) {
@@ -626,23 +627,25 @@ class Board {
         this.score += lineScore;
         this.lines += fullRows.length;
 
-        /* Level progression: level = max(startLevel, floor(lines / 10)), capped at maxLevel */
         const newLevel = Math.min(
             CONFIG.levels.maxLevel,
             Math.floor(this.lines / CONFIG.levels.linesPerLevel)
         );
         this.level = Math.max(this.level, newLevel);
 
-        /* ✅ SAFELY REMOVE ALL FULL ROWS AT ONCE */
-        /* Using a Set for O(1) lookups, then filtering out matched indices */
-        const removeSet = new Set(fullRows);
-        this.grid = this.grid.filter((_, index) => !removeSet.has(index));
-        for (let i = 0; i < fullRows.length; i++) {
-            this.grid.unshift(Array(this.width).fill(null));
+        /* ✅ Play SFX: Special sound for Tetris, standard for 1-3 lines */
+        if (fullRows.length === 4) {
+            window.game?.audio?.play('tetris');
+        } else {
+            window.game?.audio?.play('clear');
         }
 
-        this.lineFlashRows = [];
-        this.spawnPiece();
+        /* ✅ Defer removal: store rows, keep them on board during flash/pause */
+        this.pendingClearRows = fullRows;
+        this.lineFlashRows = fullRows;
+        this.isLineClearing = true;
+        this.lineClearPauseElapsed = 0;
+        this.lineFlashTimer = performance.now();
     }
 
     /* Get the Y position where the piece would land (for ghost piece) */
@@ -684,6 +687,28 @@ class Board {
         // Only reset if the piece is actually touching something
         if (this._isGrounded()) {
             this.lockElapsed = 0;
+        }
+    }
+
+    checkLineClearPause(dt) {
+        if (!this.isLineClearing) return;
+        this.lineClearPauseElapsed += dt;
+
+        if (this.lineClearPauseElapsed >= CONFIG.animations.lineClearPause) {
+            this.isLineClearing = false;
+
+            /* ✅ Remove lines NOW that the animation is complete */
+            if (this.pendingClearRows.length > 0) {
+                const removeSet = new Set(this.pendingClearRows);
+                this.grid = this.grid.filter((_, index) => !removeSet.has(index));
+                for (let i = 0; i < this.pendingClearRows.length; i++) {
+                    this.grid.unshift(Array(this.width).fill(null));
+                }
+            }
+
+            this.lineFlashRows = [];
+            this.pendingClearRows = [];
+            this.spawnPiece();
         }
     }
 }
@@ -762,13 +787,16 @@ class Renderer {
         this._drawGrid(ctx, cs, w, h);
         this._drawGridBlocks(ctx, board, cs);
 
+        /* Draw line flash animation */
         if (board.lineFlashRows.length > 0) {
             const elapsed = performance.now() - board.lineFlashTimer;
-            const duration = CONFIG.animations.lineClearDuration;
-            const alpha = 0.5 + 0.5 * Math.sin((elapsed / duration) * Math.PI);
+            const isFlashing = Math.floor((elapsed / CONFIG.animations.lineFlashSpeed) % 2) === 0;
             for (const row of board.lineFlashRows) {
-                ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-                ctx.fillRect(0, row * cs, w * cs, cs);
+                if (isFlashing) {
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)'; // Bright, classic Tetris flash
+                    ctx.fillRect(0, row * cs, w * cs, cs);
+                }
+                // When isFlashing is false, we skip drawing, letting the blocks underneath show through naturally
             }
         }
 
@@ -1073,6 +1101,10 @@ class Game {
        =========================================================== */
 
     _update(dt) {
+        if (this.board.isLineClearing) {
+            this.board.checkLineClearPause(dt);
+            return; // Skips gravity, lock timer, and directional input
+        }
         /* Gravity: accumulate time and drop piece when threshold reached */
         const dropInterval = this.board.getDropInterval();
         this.dropAccumulator += dt;
