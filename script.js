@@ -53,7 +53,7 @@ const CONFIG = {
             drop: './sounds/drop.wav',
             rotate: './sounds/rotate.wav',
             clear: './sounds/clear.wav',
-            tetris: './sounds/tetris.mp3',
+            tetris: './sounds/tetris.wav',
             gameover: './sounds/gameover.wav'
         },
         bgm: [
