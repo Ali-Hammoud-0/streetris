@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Streetris</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- ====== START SCREEN ====== -->
+    <div id="start-screen" class="screen active">
+      <div class="screen-content">
+        <h1 class="title">STREETRIS</h1>
+        <div class="level-select-group">
+          <label for="start-level">Start Level</label>
+          <div class="level-buttons" id="level-buttons"></div>
+        </div>
+        <button id="btn-start" class="btn-primary">Start Game</button>
+      </div>
+    </div>
+
+    <!-- ====== GAME SCREEN ====== -->
+    <div id="game-screen" class="screen">
+      <div class="game-layout">
+        <!-- Left Sidebar -->
+        <div class="sidebar sidebar-left">
+          <div class="stat-box">
+            <div class="stat-label">SCORE</div>
+            <div id="score" class="stat-value">0</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">LEVEL</div>
+            <div id="level" class="stat-value">0</div>
+          </div>
+          <div class="stat-box" id="lines-box">
+            <div class="stat-label">LINES</div>
+            <div id="lines" class="stat-value">0</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">HIGH SCORE</div>
+            <div id="high-score" class="stat-value">0</div>
+          </div>
+        </div>
+
+        <!-- Game Board -->
+        <div class="board-wrapper">
+          <canvas id="game-canvas"></canvas>
+        </div>
+
+        <!-- Right Sidebar -->
+        <div class="sidebar sidebar-right">
+          <div class="stat-box">
+            <div class="stat-label">NEXT</div>
+            <canvas id="next-canvas" width="120" height="120"></canvas>
+          </div>
+          <div class="bgm-selector">
+            <div class="stat-label">MUSIC</div>
+            <select id="bgm-select"></select>
+          </div>
+          <div class="pause-info">
+            <span id="pause-hint">Press <kbd>ESC</kbd> to pause</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== PAUSE OVERLAY ====== -->
+    <div id="pause-overlay" class="overlay hidden">
+      <div class="overlay-content">
+        <h2>PAUSED</h2>
+        <p>Press <kbd>ESC</kbd> to resume</p>
+      </div>
+    </div>
+
+    <!-- ====== GAME OVER SCREEN ====== -->
+    <div id="gameover-screen" class="screen">
+      <div class="screen-content">
+        <h2 class="title">GAME OVER</h2>
+        <div class="final-stats">
+          <div class="stat-row">
+            <span>Score:</span>
+            <span id="final-score">0</span>
+          </div>
+          <div class="stat-row">
+            <span>Level:</span>
+            <span id="final-level">0</span>
+          </div>
+          <div class="stat-row">
+            <span>Lines:</span>
+            <span id="final-lines">0</span>
+          </div>
+        </div>
+        <div id="new-high-score" class="new-high hidden">★ NEW HIGH SCORE ★</div>
+        <button id="btn-restart" class="btn-primary">Play Again</button>
+        <button id="btn-menu" class="btn-secondary">Main Menu</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
