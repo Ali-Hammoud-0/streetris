@@ -2,7 +2,7 @@
    CSS Variables & Theme
    ============================================ */
 :root {
-    --bg-primary: #0c0c14;
+    --bg-primary: #19192b;
     --bg-secondary: #1a1a2e;
     --bg-card: #16213e;
     --border-color: #0f3460;
@@ -14,7 +14,7 @@
     --board-bg: #0a0a12;
     --grid-line: rgba(255, 255, 255, 0.06);
     --font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    --radius: 8px;
+    --radius: 2px;
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
 }
 
@@ -459,4 +459,36 @@ body {
     .stat-value {
         font-size: 0.95rem;
     }
+}
+
+/* ============================================
+   CRT Scanline Overlay
+   ============================================ */
+#app::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    background:
+        /* Scanlines */
+        repeating-linear-gradient(
+            to bottom,
+            transparent 0px,
+            transparent 1px,
+            rgba(0, 0, 0, 0.15) 1px,
+            rgba(0, 0, 0, 0.15) 2px
+        ),
+        /* Subtle vignette */
+        radial-gradient(
+            ellipse at center,
+            transparent 60%,
+            rgba(0, 0, 0, 0.35) 100%
+        );
+    animation: crtFlicker 0.15s infinite alternate;
+}
+
+@keyframes crtFlicker {
+    0% { opacity: 0.92; }
+    100% { opacity: 1; }
 }
