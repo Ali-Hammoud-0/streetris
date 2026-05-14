@@ -58,7 +58,7 @@ const CONFIG = {
         },
         bgm: [
             { id: 'none', label: 'No Music', src: null },
-            { id: 'a', label: 'Song A', src: './music/GUILE.mp3' },
+            { id: 'a', label: 'GUILE', src: './music/GUILE.mp3' },
             { id: 'b', label: 'Song B', src: './music/track_b.mp3' }
         ],
         volume: { sfx: 0.8, bgm: 0.6 }
@@ -273,6 +273,7 @@ class InputHandler {
             }
         }
     }
+
 
     _onKeyDown(e) {
         const code = e.code;
@@ -785,25 +786,12 @@ class Renderer {
         ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
         this._drawGrid(ctx, cs, w, h);
-        this._drawGridBlocks(ctx, board, cs);
-
-        /* Draw line flash animation */
-        if (board.lineFlashRows.length > 0) {
-            const elapsed = performance.now() - board.lineFlashTimer;
-            const isFlashing = Math.floor((elapsed / CONFIG.animations.lineFlashSpeed) % 2) === 0;
-            for (const row of board.lineFlashRows) {
-                if (isFlashing) {
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)'; // Bright, classic Tetris flash
-                    ctx.fillRect(0, row * cs, w * cs, cs);
-                }
-                // When isFlashing is false, we skip drawing, letting the blocks underneath show through naturally
-            }
-        }
-
-        /* HIDE ACTIVE PIECE, GHOST, & NEXT PREVIEW WHEN PAUSED */
+        /* HIDE ALL PIECES (ACTIVE, GHOST, GRID, & NEXT) WHEN PAUSED */
         if (isPaused) {
             this.nextCtx.clearRect(0, 0, this.nextCanvas.width, this.nextCanvas.height);
         } else {
+            this._drawGridBlocks(ctx, board, cs);
+
             if (CONFIG.visuals.showGhostPiece && board.activePiece && !board.isLocked) {
                 this._drawGhostPiece(ctx, board, cs);
             }
@@ -967,6 +955,7 @@ class Game {
             document.getElementById('next-canvas')
         );
 
+
         this.state = 'menu'; // 'menu', 'playing', 'paused', 'gameover'
         this._pausedByBlur = false;
         window.addEventListener('blur', () => this._onBlur());
@@ -1026,6 +1015,7 @@ class Game {
             opt.textContent = track.label;
             select.appendChild(opt);
         }
+        select.selectedIndex = 1;
         select.addEventListener('change', () => {
             this.audio.setBgm(select.value);
             if (this.state === 'playing') this.audio.playBgm();
@@ -1099,7 +1089,6 @@ class Game {
     /* ===========================================================
        UPDATE LOGIC (called each frame during gameplay)
        =========================================================== */
-
     _update(dt) {
         if (this.board.isLineClearing) {
             this.board.checkLineClearPause(dt);
@@ -1115,6 +1104,7 @@ class Game {
         if (softDropActive) {
             effectiveDropInterval = Math.min(50, dropInterval * 0.2); // faster gravity on soft drop
         }
+
 
         if (this.dropAccumulator >= effectiveDropInterval) {
             this.dropAccumulator -= effectiveDropInterval;
@@ -1153,13 +1143,16 @@ class Game {
        =========================================================== */
 
     _onAction(action) {
-        if (this.state !== 'playing') {
-            /* Allow pause toggle from any state except gameover */
-            if (action === 'pause' && this.state === 'paused') {
+        if (this.state === 'paused') {
+            /* Allow any game control key to unpause */
+            const gameControlActions = Object.keys(CONFIG.controls.keys);
+            if (gameControlActions.includes(action)) {
                 this._togglePause();
+                return;
             }
-            return;
         }
+
+        if (this.state !== 'playing') return;
 
         switch (action) {
             case 'left':
@@ -1232,6 +1225,8 @@ class Game {
             document.getElementById('pause-overlay').classList.add('hidden');
             this.audio.playBgm();
             this.dropAccumulator = 0; // reset to avoid huge jump
+            this.lastTime = performance.now(); // reset timestamp to prevent massive dt on first frame
+
         }
     }
 
@@ -1273,7 +1268,7 @@ class Game {
         if (this._pausedByBlur && this.state === 'paused') {
             this._pausedByBlur = false;
             this.input.reset(); // ⚠️ Clears buffered events that may have queued while unfocused
-            this._togglePause();
+            // Auto-resume removed: require explicit input to unpause
         }
     }
 
