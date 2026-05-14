@@ -10,7 +10,7 @@ const CONFIG = {
     scoring: { single: 40, double: 100, triple: 300, tetris: 800, softDrop: 1 },
     speed: {
         baseDropInterval: 1000,   // ms per gravity tick at level 0
-        dropIntervalDecay: 0.95, // multiplier per level
+        dropIntervalDecay: 0.95,  // multiplier per level
         minDropInterval: 50       // fastest possible gravity tick
     },
     controls: {
@@ -18,14 +18,14 @@ const CONFIG = {
             left: ['ArrowLeft', 'KeyA'],
             right: ['ArrowRight', 'KeyD'],
             down: ['ArrowDown', 'KeyS'],
-            hardDrop: ['ArrowUp', 'KeyW'],
-            rotateCW: 'Space',
-            rotateCCW: ['AltLeft', 'AltRight'],
-            pause: 'Escape'
+            hardDrop: 'Space',
+            rotateCW: ['ArrowUp', 'KeyW', 'KeyX'],
+            rotateCCW: 'KeyZ',
+            pause: ['Escape', 'KeyP']
         },
-        das: 170,                     // Delayed Auto Shift (ms)
-        arr: 50,                     // Auto Repeat Rate (ms)
-        lockDelay: 500,              // Lock delay (ms)
+        das: 170,                      // Delayed Auto Shift (ms) - wait before auto-repeat starts
+        arr: 50,                      // Auto Repeat Rate (ms) - how fast keys repeat after DAS
+        lockDelay: 500,               // ms before piece locks when grounded
         lockDelayResetOnInput: false,  // Reset lock timer on input while grounded
         gameOverThreshold: 2          // Rows above board that trigger Game Over
     },
@@ -34,45 +34,47 @@ const CONFIG = {
         ghostPieceOpacity: 0.3,
         gridOpacity: 0.1,
         blockColors: {
-            I: '#00f0f0',
-            O: '#f0f000',
-            T: '#a000f0',
-            S: '#00f000',
-            Z: '#f00000',
-            J: '#0000f0',
-            L: '#f0a000'
+            I: '#00c1d7',
+            O: '#e3c737',
+            T: '#6a007d',
+            S: '#5bd097',
+            Z: '#d23232',
+            J: '#316cd0',
+            L: '#cb7d18'
         }
-    },
+    },  
     animations: {
         hardDropFlash: true,
-        lineClearPause: 800,    // ✅ Time to pause after line clear (ms)
-        lineFlashSpeed: 150     // ✅ Duration of each flash phase (ms)
+        lineClearPause: 900           // Time to pause after line clear before removing rows (ms)
     },
     audio: {
         sfx: {
-            drop: './sounds/drop.wav',
+            harddrop: './sounds/harddrop.wav',
+            softdrop: './sounds/softdrop.wav',
             rotate: './sounds/rotate.wav',
             clear: './sounds/clear.wav',
             tetris: './sounds/tetris.wav',
-            gameover: './sounds/gameover.wav'
+            gameover: './sounds/gameover.wav',
+            pause: './sounds/pause.wav',
+            levelup: './sounds/levelup.wav',
+            move: './sounds/move.wav'
         },
         bgm: [
             { id: 'none', label: 'No Music', src: null },
             { id: 'a', label: 'GUILE', src: './music/GUILE.mp3' },
             { id: 'b', label: 'Song B', src: './music/track_b.mp3' }
         ],
-        volume: { sfx: 0.8, bgm: 0.6 }
+        volume: { sfx: 0.8, bgm: 0.5 }
     },
     ui: {
-        pauseKey: 'Escape',
         showLinesCleared: true,
-        spawnOffset: { x: 4, y: -1 }
+        spawnOffset: { x: 4, y: -1 }  // Spawn position offset for new pieces
     },
     dev: {
         debugMode: false,
         persistentHighScore: false,
         targetFPS: 60,
-        randomizer: '7bag' // '7bag' or 'pureRandom'
+        randomizer: '7bag'            // '7bag' (fair distribution) or 'pureRandom'
     }
 };
 
@@ -98,16 +100,17 @@ const PIECE_KEYS = Object.keys(PIECES);
    ================================================================ */
 class AudioManager {
     constructor() {
-        this.sfxSounds = {};
-        this.bgmAudio = null;
+        this.sfxSounds = {};       // Template Audio elements for each SFX key
+        this.bgmAudio = null;      // Current BGM Audio element
         this.currentBgmId = 'none';
         this.sfxVolume = CONFIG.audio.volume.sfx;
         this.bgmVolume = CONFIG.audio.volume.bgm;
-        this.paused = false;
         this._loadSFX();
     }
 
-    /* Preload all SFX from CONFIG */
+    // -- SFX Management --
+
+    /* Preload all SFX from CONFIG.audio.sfx */
     _loadSFX() {
         for (const [key, path] of Object.entries(CONFIG.audio.sfx)) {
             const audio = new Audio();
@@ -118,52 +121,53 @@ class AudioManager {
         }
     }
 
-    /* Play an SFX by key. Creates a fresh clone each time so effects
-       can overlap (e.g. rapid drops). */
+    /* Play an SFX by key. Clones the template so overlapping plays work
+       (e.g. rapid drops). Falls back to replaying the original if clone fails. */
     play(key) {
         const template = this.sfxSounds[key];
         if (!template) return;
         try {
             const clone = template.cloneNode();
             clone.volume = this.sfxVolume;
-            clone.play().catch(() => { }); // ignore autoplay-blocked errors
-        } catch (e) {
-            // fallback: try playing the original
+            clone.play().catch(() => {}); // ignore autoplay-blocked errors
+        } catch {
+            // Fallback: restart the original template
             try {
                 template.currentTime = 0;
-                template.play().catch(() => { });
-            } catch (e2) { }
+                template.play().catch(() => {});
+            } catch { /* silently fail */ }
         }
     }
 
-    /* Set BGM track by id from CONFIG.audio.bgm */
+    // -- BGM Management --
+
+    /* Set BGM track by id from CONFIG.audio.bgm. Stops any currently playing track. */
     setBgm(id) {
         const track = CONFIG.audio.bgm.find(t => t.id === id);
         if (!track) return;
         this.currentBgmId = id;
 
-        /* Stop current BGM */
         this.stopBgm();
-
-        if (!track.src) return; // 'none'
+        if (!track.src) return; // 'none' selected
 
         try {
             this.bgmAudio = new Audio(track.src);
             this.bgmAudio.loop = true;
             this.bgmAudio.volume = this.bgmVolume;
-            this.bgmAudio.play().catch(() => { });
-        } catch (e) {
+            this.bgmAudio.play().catch(() => {});
+        } catch {
             this.bgmAudio = null;
         }
     }
 
+    /* Resume BGM if paused, or re-create it if it was disposed. */
     playBgm() {
         if (!this.bgmAudio) {
             this.setBgm(this.currentBgmId);
             return;
         }
         if (this.bgmAudio.paused) {
-            this.bgmAudio.play().catch(() => { });
+            this.bgmAudio.play().catch(() => {});
         }
     }
 
@@ -181,6 +185,8 @@ class AudioManager {
         }
     }
 
+    // -- Volume --
+
     setVolumes(sfxVol, bgmVol) {
         this.sfxVolume = sfxVol;
         this.bgmVolume = bgmVol;
@@ -192,6 +198,7 @@ class AudioManager {
 /* ================================================================
    RANDOMIZER
    Two modes: 7-Bag (modern fair distribution) and Pure Random.
+   7-Bag guarantees each of the 7 tetrominos appears once before repeating.
    ================================================================ */
 class Randomizer {
     constructor(mode) {
@@ -199,32 +206,32 @@ class Randomizer {
         this.bag = [];
     }
 
+    // -- Piece Generation --
+
     /* Returns the next tetromino key string */
     next() {
         if (this.mode === '7bag') {
-            if (this.bag.length === 0) {
-                this._refillBag();
-            }
+            if (this.bag.length === 0) this._refillBag();
             return this.bag.pop();
-        } else {
-            /* Pure random: equal chance each time */
-            return PIECE_KEYS[Math.floor(Math.random() * PIECE_KEYS.length)];
         }
+        // Pure random: equal chance for any piece each time
+        return PIECE_KEYS[Math.floor(Math.random() * PIECE_KEYS.length)];
     }
 
-    /* Peek at the upcoming piece (for preview) */
+    /* Peek at the upcoming piece (for preview display) */
     peek() {
         if (this.mode === '7bag') {
             if (this.bag.length === 0) this._refillBag();
             return this.bag[this.bag.length - 1];
-        } else {
-            return PIECE_KEYS[Math.floor(Math.random() * PIECE_KEYS.length)];
         }
+        return PIECE_KEYS[Math.floor(Math.random() * PIECE_KEYS.length)];
     }
 
+    // -- Internal --
+
+    /* Refill the bag with all 7 pieces, shuffled via Fisher-Yates */
     _refillBag() {
         this.bag = [...PIECE_KEYS];
-        /* Fisher-Yates shuffle */
         for (let i = this.bag.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [this.bag[i], this.bag[j]] = [this.bag[j], this.bag[i]];
@@ -234,38 +241,41 @@ class Randomizer {
 
 /* ================================================================
    INPUT HANDLER
-   Manages keyboard input with DAS/ARR, key dedup, and pause detection.
+   Manages keyboard input with DAS (Delayed Auto Shift) and
+   ARR (Auto Repeat Rate) for held directional keys.
    ================================================================ */
 class InputHandler {
     constructor() {
+        /* Track state per action. DAS/ARR timers only used by left/right/down. */
         this.actions = {
             left: { pressed: false, dasTimer: null, arrTimer: null },
             right: { pressed: false, dasTimer: null, arrTimer: null },
             down: { pressed: false, dasTimer: null, arrTimer: null },
-            hardDrop: { pressed: false, dasTimer: null, arrTimer: null },
+            hardDrop: { pressed: false },
             rotateCW: { pressed: false },
             rotateCCW: { pressed: false },
             pause: { pressed: false }
         };
 
-        /* Map every configured key code to its action(s) */
+        /* Reverse lookup: keyCode -> list of action names */
         this.keyMap = new Map();
         this._buildKeyMap();
 
+        /* Callbacks invoked by Game class */
         this.callbacks = {
-            onAction: null,   // (action) => void, for instant actions
-            onRepeat: null,   // (action) => void, for DAS/ARR repeat
-            onPause: null     // () => void
+            onAction: null,   // (action) => void  – fired on initial key press
+            onRepeat: null    // (action) => void  – fired by ARR timer while held
         };
 
         window.addEventListener('keydown', (e) => this._onKeyDown(e));
         window.addEventListener('keyup', (e) => this._onKeyUp(e));
     }
 
-    /* Build a reverse lookup: keyCode -> list of actions */
+    // -- Key Mapping --
+
+    /* Build reverse lookup from CONFIG.controls.keys: keyCode -> [action, ...] */
     _buildKeyMap() {
-        const keys = CONFIG.controls.keys;
-        for (const [action, keyCodes] of Object.entries(keys)) {
+        for (const [action, keyCodes] of Object.entries(CONFIG.controls.keys)) {
             const codes = Array.isArray(keyCodes) ? keyCodes : [keyCodes];
             for (const code of codes) {
                 if (!this.keyMap.has(code)) this.keyMap.set(code, []);
@@ -274,16 +284,14 @@ class InputHandler {
         }
     }
 
+    // -- Event Handlers --
 
     _onKeyDown(e) {
-        const code = e.code;
-        const actions = this.keyMap.get(code);
+        const actions = this.keyMap.get(e.code);
         if (!actions) return;
 
-        /* Prevent default browser behavior for game keys */
-        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Escape', 'AltLeft', 'AltRight'].includes(code)) {
-            e.preventDefault();
-        }
+        /* Prevent scrolling / browser shortcuts for any mapped game key */
+        e.preventDefault();
 
         for (const action of actions) {
             this._handlePress(action);
@@ -291,8 +299,7 @@ class InputHandler {
     }
 
     _onKeyUp(e) {
-        const code = e.code;
-        const actions = this.keyMap.get(code);
+        const actions = this.keyMap.get(e.code);
         if (!actions) return;
 
         for (const action of actions) {
@@ -300,17 +307,19 @@ class InputHandler {
         }
     }
 
+    // -- Action State --
+
     _handlePress(action) {
         const act = this.actions[action];
         if (!act || act.pressed) return;
 
         act.pressed = true;
 
-        /* Instant move on first press */
+        /* Fire instant action callback on first press */
         if (this.callbacks.onAction) this.callbacks.onAction(action);
 
-        /* DAS/ARR only for horizontal movement */
-        if (['left', 'right'].includes(action)) {
+        /* Start DAS/ARR repeat for directional hold (left, right, down) */
+        if (['left', 'right', 'down'].includes(action)) {
             act.dasTimer = setTimeout(() => {
                 act.arrTimer = setInterval(() => {
                     if (this.callbacks.onRepeat) this.callbacks.onRepeat(action);
@@ -328,22 +337,30 @@ class InputHandler {
         if (act.arrTimer) { clearInterval(act.arrTimer); act.arrTimer = null; }
     }
 
+    /* Reset all action state and timers (used on pause / game over) */
     reset() {
         for (const act of Object.values(this.actions)) {
-            /* Guard against non-object values */
-            if (act && typeof act === 'object') {
-                act.pressed = false;
-                if (act.dasTimer !== undefined) { clearTimeout(act.dasTimer); act.dasTimer = null; }
-                if (act.arrTimer !== undefined) { clearInterval(act.arrTimer); act.arrTimer = null; }
-            }
+            act.pressed = false;
+            if (act.dasTimer) { clearTimeout(act.dasTimer); act.dasTimer = null; }
+            if (act.arrTimer) { clearInterval(act.arrTimer); act.arrTimer = null; }
         }
     }
 }
 
 /* ================================================================
    BOARD / STATE MANAGER
-   Manages the grid, pieces, scoring, leveling, and line clears.
+   Manages the grid, active piece, scoring, leveling, line clears,
+   lock delay, and ghost piece calculation.
    ================================================================ */
+
+/* Shared wall-kick offsets tried when a rotation collides.
+   Format: [dx, dy] – tested in order until one fits. */
+const WALL_KICKS = [
+    [-1, 0], [1, 0], [0, -1],
+    [-2, 0], [2, 0], [0, -2],
+    [-1, -1], [1, -1]
+];
+
 class Board {
     constructor() {
         this.width = CONFIG.board.width;
@@ -355,28 +372,28 @@ class Board {
         this.activePiece = null;
         this.activeX = 0;
         this.activeY = 0;
-        this.activeRotation = 0; // 0, 1, 2, 3 (quarters turned CW)
-        this.lockTimer = null;
-        this.lockElapsed = 0;
+        this.activeRotation = 0;    // 0..3  (quarter-turns CW from base)
+        this.lockElapsed = 0;       // ms accumulated toward lock delay
         this.isLocked = false;
-        this.lineFlashRows = []; // rows currently animating flash
-        this.lineFlashTimer = 0;
+        this.lineFlashRows = [];    // rows currently flashing during line-clear anim
+        this.lineFlashTimer = 0;    // timestamp when flash started
         this.isLineClearing = false;
         this.lineClearPauseElapsed = 0;
         this.pendingClearRows = [];
+        this.pendingLevelUp = false;  // Track level up for deferred sound
         this.gameOver = false;
         this.randomizer = new Randomizer(CONFIG.dev.randomizer);
         this.nextPieceKey = this.randomizer.next();
     }
 
-    /* Create empty grid: 2D array of null (empty) or piece key string */
+    // -- Grid Initialization --
+
+    /* Create an empty height x width grid (null = empty cell) */
     _createGrid() {
-        return Array.from({ length: this.height }, () =>
-            Array(this.width).fill(null)
-        );
+        return Array.from({ length: this.height }, () => Array(this.width).fill(null));
     }
 
-    /* Reset board state for new game */
+    /* Reset all board state for a new game */
     reset(startLevel) {
         this.grid = this._createGrid();
         this.score = 0;
@@ -386,41 +403,45 @@ class Board {
         this.activeX = 0;
         this.activeY = 0;
         this.activeRotation = 0;
-        this.lockTimer = null;
         this.lockElapsed = 0;
         this.isLocked = false;
         this.lineFlashRows = [];
         this.lineFlashTimer = 0;
+        this.isLineClearing = false;
+        this.lineClearPauseElapsed = 0;
+        this.pendingClearRows = [];
+        this.pendingLevelUp = false;
         this.gameOver = false;
         this.randomizer = new Randomizer(CONFIG.dev.randomizer);
         this.nextPieceKey = this.randomizer.next();
     }
 
-    /* Spawn a new active piece from the queue */
+    // -- Piece Spawning --
+
+    /* Spawn the next queued piece at the top-center of the board.
+       Sets gameOver = true if the spawn position immediately collides. */
     spawnPiece() {
         const key = this.nextPieceKey;
         this.nextPieceKey = this.randomizer.next();
 
         const shape = this._getRotatedShape(key, 0);
-        const offsetX = CONFIG.ui.spawnOffset.x;
-        const offsetY = CONFIG.ui.spawnOffset.y; // Uses the negative buffer from config
-
         this.activePiece = key;
         this.activeRotation = 0;
-        this.activeX = offsetX - Math.floor(shape[0].length / 2);
-        this.activeY = offsetY;
+        this.activeX = CONFIG.ui.spawnOffset.x - Math.floor(shape[0].length / 2);
+        this.activeY = CONFIG.ui.spawnOffset.y;
         this.isLocked = false;
         this.lockElapsed = 0;
-        if (this.lockTimer) { clearTimeout(this.lockTimer); this.lockTimer = null; }
 
-        /* Check for immediate collision (game over) */
+        /* Collision at spawn means the board is full -> game over */
         if (this._collides(this.activeX, this.activeY, shape)) {
             this.gameOver = true;
-            this.activePiece = null; // Halt gravity/state updates
+            this.activePiece = null; // Prevent further gravity / input updates
         }
     }
 
-    /* Get the shape matrix for a given piece type and rotation quarter */
+    // -- Shape / Rotation Utilities --
+
+    /* Return a deep-copied shape matrix rotated `rotation` quarter-turns CW */
     _getRotatedShape(key, rotation) {
         let shape = PIECES[key].shape.map(row => [...row]);
         for (let i = 0; i < rotation; i++) {
@@ -429,7 +450,7 @@ class Board {
         return shape;
     }
 
-    /* Rotate a square matrix 90° clockwise */
+    /* Rotate a square matrix 90 degrees clockwise */
     _rotateMatrixCW(matrix) {
         const n = matrix.length;
         const result = Array.from({ length: n }, () => Array(n).fill(0));
@@ -441,157 +462,118 @@ class Board {
         return result;
     }
 
-    /* Rotate a square matrix 90° counter-clockwise */
-    _rotateMatrixCCW(matrix) {
-        const n = matrix.length;
-        const result = Array.from({ length: n }, () => Array(n).fill(0));
-        for (let r = 0; r < n; r++) {
-            for (let c = 0; c < n; c++) {
-                result[n - 1 - c][r] = matrix[r][c];
-            }
-        }
-        return result;
-    }
+    // -- Collision Detection --
 
-    /* Check if a shape at given position collides with walls or placed blocks */
+    /* Check whether `shape` placed at (x, y) overlaps walls or locked blocks.
+       Cells above the visible board (y < 0) are allowed (spawn buffer). */
     _collides(x, y, shape) {
         for (let r = 0; r < shape.length; r++) {
             for (let c = 0; c < shape[r].length; c++) {
                 if (!shape[r][c]) continue;
-                const boardX = x + c;
-                const boardY = y + r;
-                /* Out of bounds horizontally */
-                if (boardX < 0 || boardX >= this.width) return true;
-                /* Below the board */
-                if (boardY >= this.height) return true;
-                /* Above the visible board (handled by spawn) */
-                if (boardY < 0) continue;
-                /* Occupied cell */
-                if (this.grid[boardY][boardX] !== null) return true;
+                const bx = x + c;
+                const by = y + r;
+                if (bx < 0 || bx >= this.width) return true;   // horizontal wall
+                if (by >= this.height) return true;             // floor
+                if (by < 0) continue;                           // above-board buffer
+                if (this.grid[by][bx] !== null) return true;    // locked block
             }
         }
         return false;
     }
 
-    /* Attempt to move the active piece. Returns true if successful. */
-    move(dx, dy) {
-        if (!this.activePiece || this.isLocked) return false;
-        const shape = this._getRotatedShape(this.activePiece, this.activeRotation);
-        if (!this._collides(this.activeX + dx, this.activeY + dy, shape)) {
-            this.activeX += dx;
-            this.activeY += dy;
-
-            /* Reset lock delay on input if configured */
-            if (this._isGrounded() && CONFIG.controls.lockDelayResetOnInput) {
-                this._resetLockTimer();
-            }
-            return true;
-        }
-        return false;
-    }
-
-    /* Attempt to rotate CW. Uses basic wall kicks. */
-    rotateCW() {
-        if (!this.activePiece || this.isLocked) return false;
-        const newRot = (this.activeRotation + 1) % 4;
-        const shape = this._getRotatedShape(this.activePiece, newRot);
-
-        /* Try base position */
-        if (!this._collides(this.activeX, this.activeY, shape)) {
-            this.activeRotation = newRot;
-            if (this._isGrounded() && CONFIG.controls.lockDelayResetOnInput) {
-                this._resetLockTimer();
-            }
-            return true;
-        }
-
-        /* Basic wall kicks: try shifting left, right, up */
-        const kicks = [
-            [-1, 0], [1, 0], [0, -1],
-            [-2, 0], [2, 0], [0, -2],
-            [-1, -1], [1, -1]
-        ];
-        for (const [kx, ky] of kicks) {
-            if (!this._collides(this.activeX + kx, this.activeY + ky, shape)) {
-                this.activeX += kx;
-                this.activeY += ky;
-                this.activeRotation = newRot;
-                if (this._isGrounded() && CONFIG.controls.lockDelayResetOnInput) {
-                    this._resetLockTimer();
-                }
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /* Attempt to rotate CCW */
-    rotateCCW() {
-        if (!this.activePiece || this.isLocked) return false;
-        const newRot = (this.activeRotation + 3) % 4;
-        const shape = this._getRotatedShape(this.activePiece, newRot);
-
-        if (!this._collides(this.activeX, this.activeY, shape)) {
-            this.activeRotation = newRot;
-            if (this._isGrounded() && CONFIG.controls.lockDelayResetOnInput) {
-                this._resetLockTimer();
-            }
-            return true;
-        }
-
-        const kicks = [
-            [-1, 0], [1, 0], [0, -1],
-            [-2, 0], [2, 0], [0, -2],
-            [-1, -1], [1, -1]
-        ];
-        for (const [kx, ky] of kicks) {
-            if (!this._collides(this.activeX + kx, this.activeY + ky, shape)) {
-                this.activeX += kx;
-                this.activeY += ky;
-                this.activeRotation = newRot;
-                if (this._isGrounded() && CONFIG.controls.lockDelayResetOnInput) {
-                    this._resetLockTimer();
-                }
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /* Check if the active piece is resting on something */
+    /* Check whether the active piece would collide one row below (grounded) */
     _isGrounded() {
         if (!this.activePiece) return false;
         const shape = this._getRotatedShape(this.activePiece, this.activeRotation);
         return this._collides(this.activeX, this.activeY + 1, shape);
     }
 
-    /* Hard drop: move piece to the lowest valid position and lock */
+    // -- Movement --
+
+    /* Attempt to shift the active piece by (dx, dy). Returns true on success. */
+    move(dx, dy) {
+        if (!this.activePiece || this.isLocked) return false;
+        const shape = this._getRotatedShape(this.activePiece, this.activeRotation);
+        if (!this._collides(this.activeX + dx, this.activeY + dy, shape)) {
+            this.activeX += dx;
+            this.activeY += dy;
+            this._maybeResetLockDelay();
+            // Play move sound on horizontal movement only
+            if (dx !== 0) {
+                window.game?.audio?.play('move');
+            }
+            return true;
+        }
+        return false;
+    }
+
+    // -- Rotation (shared logic for CW and CCW) --
+
+    /* Attempt rotation to `newRot`. Tries base position then WALL_KICKS.
+       Resets lock delay on success if grounded and configured. */
+    _tryRotate(newRot) {
+        if (!this.activePiece || this.isLocked) return false;
+        const shape = this._getRotatedShape(this.activePiece, newRot);
+
+        // Try the current position first
+        if (!this._collides(this.activeX, this.activeY, shape)) {
+            this.activeRotation = newRot;
+            this._maybeResetLockDelay();
+            return true;
+        }
+
+        // Try each wall-kick offset in order
+        for (const [kx, ky] of WALL_KICKS) {
+            if (!this._collides(this.activeX + kx, this.activeY + ky, shape)) {
+                this.activeX += kx;
+                this.activeY += ky;
+                this.activeRotation = newRot;
+                this._maybeResetLockDelay();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /* Rotate clockwise (quarter-turn +1) */
+    rotateCW() {
+        return this._tryRotate((this.activeRotation + 1) % 4);
+    }
+
+    /* Rotate counter-clockwise (quarter-turn +3 ≡ -1 mod 4) */
+    rotateCCW() {
+        return this._tryRotate((this.activeRotation + 3) % 4);
+    }
+
+    // -- Locking --
+
+    /* Hard drop: slide piece to the lowest valid Y, then lock it.
+       Returns the number of cells dropped (for scoring). */
     hardDrop() {
         if (!this.activePiece || this.isLocked) return 0;
-        let dropDistance = 0;
+        let distance = 0;
         const shape = this._getRotatedShape(this.activePiece, this.activeRotation);
         while (!this._collides(this.activeX, this.activeY + 1, shape)) {
             this.activeY++;
-            dropDistance++;
+            distance++;
         }
         this._lockPiece();
-        return dropDistance;
+        return distance;
     }
 
-    /* Lock the active piece into the grid */
+    /* Bake the active piece into the grid and trigger line-check. */
     _lockPiece() {
         if (!this.activePiece || this.isLocked) return;
         this.isLocked = true;
-        if (this.lockTimer) { clearTimeout(this.lockTimer); this.lockTimer = null; }
 
         const shape = this._getRotatedShape(this.activePiece, this.activeRotation);
         for (let r = 0; r < shape.length; r++) {
             for (let c = 0; c < shape[r].length; c++) {
                 if (!shape[r][c]) continue;
-                const boardX = this.activeX + c;
-                const boardY = this.activeY + r;
-                if (boardY >= 0 && boardY < this.height && boardX >= 0 && boardX < this.width) {
-                    this.grid[boardY][boardX] = this.activePiece;
+                const bx = this.activeX + c;
+                const by = this.activeY + r;
+                if (by >= 0 && by < this.height && bx >= 0 && bx < this.width) {
+                    this.grid[by][bx] = this.activePiece;
                 }
             }
         }
@@ -600,7 +582,34 @@ class Board {
         this._checkLines();
     }
 
-    /* Check for completed lines and score them */
+    /* Called each frame: accumulate lock delay while grounded, lock when threshold hit. */
+    updateLockDelay(dt) {
+        if (!this.activePiece || this.isLocked) return;
+
+        if (this._isGrounded()) {
+            this.lockElapsed += dt;
+            if (this.lockElapsed >= CONFIG.controls.lockDelay) {
+                this._lockPiece();
+                // Play softdrop (lock) sound - distinct from harddrop
+                window.game?.audio?.play('softdrop');
+            }
+        } else {
+            this.lockElapsed = 0; // mid-air: reset
+        }
+    }
+
+    /* Reset lock timer if the piece is grounded and the feature is enabled.
+       Called after every successful move or rotation. */
+    _maybeResetLockDelay() {
+        if (CONFIG.controls.lockDelayResetOnInput && this._isGrounded()) {
+            this.lockElapsed = 0;
+        }
+    }
+
+    // -- Line Clearing --
+
+    /* Detect full rows, calculate score/level, play SFX, and start the
+       deferred-clear animation (rows stay visible during the flash). */
     _checkLines() {
         const fullRows = [];
         for (let r = 0; r < this.height; r++) {
@@ -614,7 +623,7 @@ class Board {
             return;
         }
 
-        /* Calculate score using Gameboy formula */
+        // Score using Gameboy formula: base × (level + 1)
         const multiplier = this.level + 1;
         let lineScore = 0;
         switch (fullRows.length) {
@@ -628,20 +637,27 @@ class Board {
         this.score += lineScore;
         this.lines += fullRows.length;
 
+        // Level up (capped at maxLevel)
+        const oldLevel = this.level;
         const newLevel = Math.min(
             CONFIG.levels.maxLevel,
             Math.floor(this.lines / CONFIG.levels.linesPerLevel)
         );
         this.level = Math.max(this.level, newLevel);
 
-        /* ✅ Play SFX: Special sound for Tetris, standard for 1-3 lines */
+        // Defer level up sound to play after line clear animation
+        if (this.level > oldLevel) {
+            this.pendingLevelUp = true;
+        }
+
+        // Play appropriate SFX
         if (fullRows.length === 4) {
             window.game?.audio?.play('tetris');
         } else {
             window.game?.audio?.play('clear');
         }
 
-        /* ✅ Defer removal: store rows, keep them on board during flash/pause */
+        // Defer row removal so the flash animation can play first
         this.pendingClearRows = fullRows;
         this.lineFlashRows = fullRows;
         this.isLineClearing = true;
@@ -649,7 +665,40 @@ class Board {
         this.lineFlashTimer = performance.now();
     }
 
-    /* Get the Y position where the piece would land (for ghost piece) */
+    /* Called each frame during line-clear animation. After the configured
+       pause elapses, actually remove the rows and spawn the next piece. */
+    checkLineClearPause(dt) {
+        if (!this.isLineClearing) return;
+        this.lineClearPauseElapsed += dt;
+
+        if (this.lineClearPauseElapsed >= CONFIG.animations.lineClearPause) {
+            this.isLineClearing = false;
+
+            // Remove cleared rows and prepend empty ones
+            if (this.pendingClearRows.length > 0) {
+                const removeSet = new Set(this.pendingClearRows);
+                this.grid = this.grid.filter((_, i) => !removeSet.has(i));
+                for (let i = 0; i < this.pendingClearRows.length; i++) {
+                    this.grid.unshift(Array(this.width).fill(null));
+                }
+            }
+
+            this.lineFlashRows = [];
+            this.pendingClearRows = [];
+
+            // Play deferred level up sound after line clear animation
+            if (this.pendingLevelUp) {
+                this.pendingLevelUp = false;
+                window.game?.audio?.play('levelup');
+            }
+
+            this.spawnPiece();
+        }
+    }
+
+    // -- Query Helpers --
+
+    /* Y coordinate where the active piece would land (for ghost piece rendering) */
     getGhostY() {
         if (!this.activePiece) return this.activeY;
         const shape = this._getRotatedShape(this.activePiece, this.activeRotation);
@@ -660,57 +709,11 @@ class Board {
         return ghostY;
     }
 
-    /* Get the current drop interval in ms based on level */
+    /* Gravity tick interval in ms for the current level */
     getDropInterval() {
-        const interval = CONFIG.speed.baseDropInterval * Math.pow(CONFIG.speed.dropIntervalDecay, this.level);
+        const interval = CONFIG.speed.baseDropInterval *
+            Math.pow(CONFIG.speed.dropIntervalDecay, this.level);
         return Math.max(interval, CONFIG.speed.minDropInterval);
-    }
-
-    /* Called each frame to update lock delay timer */
-    updateLockDelay(dt) {
-        if (!this.activePiece || this.isLocked) return;
-
-        if (this._isGrounded()) {
-            // Accumulate time while piece is resting on blocks/ground
-            this.lockElapsed += dt;
-            // Lock when threshold is reached
-            if (this.lockElapsed >= CONFIG.controls.lockDelay) {
-                this._lockPiece();
-            }
-        } else {
-            // Piece is mid-air: reset timer immediately
-            this.lockElapsed = 0;
-        }
-    }
-
-    /* Reset the lock timer (called on input while grounded) */
-    _resetLockTimer() {
-        // Only reset if the piece is actually touching something
-        if (this._isGrounded()) {
-            this.lockElapsed = 0;
-        }
-    }
-
-    checkLineClearPause(dt) {
-        if (!this.isLineClearing) return;
-        this.lineClearPauseElapsed += dt;
-
-        if (this.lineClearPauseElapsed >= CONFIG.animations.lineClearPause) {
-            this.isLineClearing = false;
-
-            /* ✅ Remove lines NOW that the animation is complete */
-            if (this.pendingClearRows.length > 0) {
-                const removeSet = new Set(this.pendingClearRows);
-                this.grid = this.grid.filter((_, index) => !removeSet.has(index));
-                for (let i = 0; i < this.pendingClearRows.length; i++) {
-                    this.grid.unshift(Array(this.width).fill(null));
-                }
-            }
-
-            this.lineFlashRows = [];
-            this.pendingClearRows = [];
-            this.spawnPiece();
-        }
     }
 }
 
@@ -786,7 +789,7 @@ class Renderer {
         ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
         this._drawGrid(ctx, cs, w, h);
-        /* HIDE ALL PIECES (ACTIVE, GHOST, GRID, & NEXT) WHEN PAUSED */
+
         if (isPaused) {
             this.nextCtx.clearRect(0, 0, this.nextCanvas.width, this.nextCanvas.height);
         } else {
@@ -801,9 +804,31 @@ class Renderer {
             this._drawNextPiece(board);
         }
 
+        // Draw line-clear flash: toggle white overlay on cleared rows
+        this._drawLineFlash(ctx, board, cs, w);
+
+        // Overlay hard-drop flash
         if (this.hardDropFlashAlpha > 0) {
             ctx.fillStyle = `rgba(255, 255, 255, ${this.hardDropFlashAlpha})`;
             ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        }
+    }
+
+    /* Draw the flashing white bars on completed rows during line-clear animation.
+       Toggles on/off every ~120ms to create a blink effect. */
+    _drawLineFlash(ctx, board, cs, boardW) {
+        if (board.lineFlashRows.length === 0) return;
+
+        // Determine flash phase: blink on/off every 120ms
+        const elapsed = performance.now() - board.lineFlashTimer;
+        const flashPeriod = 120; // ms per on/off phase
+        const isVisible = Math.floor(elapsed / flashPeriod) % 2 === 0;
+
+        if (!isVisible) return; // "off" phase — skip drawing
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        for (const row of board.lineFlashRows) {
+            ctx.fillRect(0, row * cs, boardW * cs, cs);
         }
     }
 
@@ -1086,31 +1111,32 @@ class Game {
         requestAnimationFrame((t) => this._gameLoop(t));
     }
 
-    /* ===========================================================
-       UPDATE LOGIC (called each frame during gameplay)
-       =========================================================== */
+    // -- Update Loop --
+
+    /* Called each frame during gameplay. Handles gravity, lock delay,
+       line-clear animation, and game-over detection. */
     _update(dt) {
+        // During line-clear animation, skip all game logic
         if (this.board.isLineClearing) {
             this.board.checkLineClearPause(dt);
-            return; // Skips gravity, lock timer, and directional input
+            return;
         }
-        /* Gravity: accumulate time and drop piece when threshold reached */
+
+        // Gravity: accumulate time and drop piece when threshold reached
         const dropInterval = this.board.getDropInterval();
         this.dropAccumulator += dt;
 
-        /* Handle soft drop: holding down speeds up gravity */
+        // Soft drop: holding down speeds up gravity
         const softDropActive = this.input.actions.down.pressed;
         let effectiveDropInterval = dropInterval;
         if (softDropActive) {
-            effectiveDropInterval = Math.min(50, dropInterval * 0.2); // faster gravity on soft drop
+            effectiveDropInterval = Math.min(50, dropInterval * 0.2);
         }
-
 
         if (this.dropAccumulator >= effectiveDropInterval) {
             this.dropAccumulator -= effectiveDropInterval;
             if (this.board.activePiece && !this.board.isLocked && !this.board.gameOver) {
                 this.board.move(0, 1);
-                /* Soft drop scoring: 1 point per cell */
                 if (softDropActive) {
                     this.board.score += CONFIG.scoring.softDrop;
                     this._updateStats();
@@ -1118,83 +1144,37 @@ class Game {
             }
         }
 
-        /* Update lock delay */
+        // Lock delay
         this.board.updateLockDelay(dt);
 
-        /* Check for line clear animation time */
+        // Line-clear flash: clear the flash rows after the animation duration
         if (this.board.lineFlashRows.length > 0) {
             const elapsed = performance.now() - this.board.lineFlashTimer;
-            if (elapsed > CONFIG.animations.lineClearDuration) {
+            if (elapsed > CONFIG.animations.lineClearPause) {
                 this.board.lineFlashRows = [];
             }
         }
 
-        /* Update stats display */
+        // Update stats display
         this._updateStats();
 
-        /* Check game over */
+        // Game over check
         if (this.board.gameOver) {
             this._triggerGameOver();
         }
     }
 
-    /* ===========================================================
-       INPUT CALLBACKS
-       =========================================================== */
+    // -- Input Callbacks --
 
+    /* Handle single-action input (first press of a key) */
     _onAction(action) {
+        // Any game-control key unpauses the game
         if (this.state === 'paused') {
-            /* Allow any game control key to unpause */
-            const gameControlActions = Object.keys(CONFIG.controls.keys);
-            if (gameControlActions.includes(action)) {
+            if (Object.keys(CONFIG.controls.keys).includes(action)) {
                 this._togglePause();
                 return;
             }
         }
-
-        if (this.state !== 'playing') return;
-
-        switch (action) {
-            case 'left':
-                if (this.board.activePiece && !this.board.isLocked) {
-                    this.board.move(-1, 0);
-                }
-                break;
-            case 'right':
-                if (this.board.activePiece && !this.board.isLocked) {
-                    this.board.move(1, 0);
-                }
-                break;
-            case 'down':
-                /* Soft drop handled in _update via gravity speed */
-                break;
-            case 'hardDrop':
-                if (this.board.activePiece && !this.board.isLocked) {
-                    const dropDist = this.board.hardDrop();
-                    this.board.score += dropDist * CONFIG.scoring.softDrop;
-                    this.renderer.triggerHardDropFlash();
-                    this.audio.play('drop');
-                    this._updateStats();
-                }
-                break;
-            case 'rotateCW':
-                if (this.board.rotateCW()) {
-                    this.audio.play('rotate');
-                }
-                break;
-            case 'rotateCCW':
-                if (this.board.rotateCCW()) {
-                    this.audio.play('rotate');
-                }
-                break;
-            case 'pause':
-                this._togglePause();
-                break;
-        }
-    }
-
-    _onRepeat(action) {
-        /* DAS/ARR repeat for held directional keys */
         if (this.state !== 'playing') return;
 
         switch (action) {
@@ -1205,7 +1185,42 @@ class Game {
                 if (this.board.activePiece && !this.board.isLocked) this.board.move(1, 0);
                 break;
             case 'down':
-                /* Soft drop handled by gravity speed, no repeat needed */
+                // Soft drop handled in _update via gravity speed
+                break;
+            case 'hardDrop':
+                if (this.board.activePiece && !this.board.isLocked) {
+                    const dropDist = this.board.hardDrop();
+                    this.board.score += dropDist * CONFIG.scoring.softDrop;
+                    this.renderer.triggerHardDropFlash();
+                    this.audio.play('harddrop');
+                    this._updateStats();
+                }
+                break;
+            case 'rotateCW':
+                if (this.board.rotateCW()) this.audio.play('rotate');
+                break;
+            case 'rotateCCW':
+                if (this.board.rotateCCW()) this.audio.play('rotate');
+                break;
+            case 'pause':
+                this._togglePause();
+                break;
+        }
+    }
+
+    /* Handle repeated input from DAS/ARR (held keys) */
+    _onRepeat(action) {
+        if (this.state !== 'playing') return;
+
+        switch (action) {
+            case 'left':
+                if (this.board.activePiece && !this.board.isLocked) this.board.move(-1, 0);
+                break;
+            case 'right':
+                if (this.board.activePiece && !this.board.isLocked) this.board.move(1, 0);
+                break;
+            case 'down':
+                // Soft drop handled by gravity speed, no repeat needed
                 break;
         }
     }
@@ -1215,6 +1230,7 @@ class Game {
        =========================================================== */
 
     _togglePause() {
+        this.audio.play('pause');
         if (this.state === 'playing') {
             this.state = 'paused';
             document.getElementById('pause-overlay').classList.remove('hidden');
