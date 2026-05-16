@@ -1,3 +1,21 @@
+//TODO:
+//Make line blinking animation invisible while game is paused
+
+//STREET FIGHTER THEME:
+//Every level is a different SF2 character
+//Sound effects, background music, background stage changes accordingly 
+//Street fighter sprites - player stands to left of game and does different attacks based on 1,2,3,4 lines
+//Next challenger portrait shows on right side
+//Music speeds up when blocks are near top
+//Player dies when game over
+//On next level game pauses and plays "HERE COMES NEW CHALLENGER" theme
+//SFX: Coin (on selecting a level), Start (on game start), Small attack, Medium attack, Big attack, Special Move
+//Unlockable level select: Player is forced to start at level 0,
+//// Other character portraits are grayed out up to level 9
+//// Levels 10-20 are also unlockable (secret) 
+////If player beats level 20 (akuma), unlocks Classic Tetris theme 
+
+
 
 /* ================================================================
    CONFIGURATION
@@ -10,8 +28,8 @@ const CONFIG = {
     scoring: { single: 40, double: 100, triple: 300, tetris: 800, softDrop: 1 },
     speed: {
         baseDropInterval: 1000,   // ms per gravity tick at level 0
-        dropIntervalDecay: 0.95,  // multiplier per level
-        minDropInterval: 50       // fastest possible gravity tick
+        dropIntervalDecay: 0.82,  // multiplier per level
+        minDropInterval: 20       // fastest possible gravity tick
     },
     controls: {
         keys: {
@@ -72,7 +90,7 @@ const CONFIG = {
     },
     dev: {
         debugMode: false,
-        persistentHighScore: false,
+        persistentHighScore: true,
         targetFPS: 60,
         randomizer: '7bag'            // '7bag' (fair distribution) or 'pureRandom'
     }
@@ -713,6 +731,7 @@ class Board {
     getDropInterval() {
         const interval = CONFIG.speed.baseDropInterval *
             Math.pow(CONFIG.speed.dropIntervalDecay, this.level);
+        console.log(Math.max(interval, CONFIG.speed.minDropInterval));
         return Math.max(interval, CONFIG.speed.minDropInterval);
     }
 }
@@ -986,7 +1005,7 @@ class Game {
         window.addEventListener('blur', () => this._onBlur());
         window.addEventListener('focus', () => this._onFocus());
         this.selectedStartLevel = 0;
-        this.sessionHighScore = 0;
+        this.sessionHighScore = this._loadHighScore();
         this.lastTime = 0;
         this.dropAccumulator = 0;
 
@@ -1017,7 +1036,7 @@ class Game {
     _setupStartScreen() {
         const container = document.getElementById('level-buttons');
         container.innerHTML = '';
-        for (let i = 0; i <= 9; i++) {
+        for (let i = 0; i <= 20; i++) {
             const btn = document.createElement('button');
             btn.className = 'level-btn' + (i === 0 ? ' selected' : '');
             btn.textContent = i;
@@ -1260,6 +1279,7 @@ class Game {
         const newHigh = this.board.score > this.sessionHighScore;
         if (newHigh) {
             this.sessionHighScore = this.board.score;
+            this._saveHighScore();
         }
 
         /* Populate game over screen */
@@ -1291,6 +1311,23 @@ class Game {
     /* ===========================================================
        UTILITY
        =========================================================== */
+
+    _loadHighScore() {
+        if (!CONFIG.dev.persistentHighScore) return 0;
+        try {
+            const saved = localStorage.getItem('streetris_highScore');
+            return saved ? parseInt(saved, 10) : 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    _saveHighScore() {
+        if (!CONFIG.dev.persistentHighScore) return;
+        try {
+            localStorage.setItem('streetris_highScore', this.sessionHighScore.toString());
+        } catch { /* silently fail if storage unavailable */ }
+    }
 
     _formatScore(n) {
         return n.toLocaleString();
